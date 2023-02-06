@@ -15,13 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.server.common;
 
-/**
- * This package provides commonly used classes for the block movement.
- */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+import java.io.File;
 
 import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.hadoop.hdfs.server.namenode.JournalManager;
+
+/**
+ * Interface which implementations of {@link JournalManager} can use to report
+ * errors on underlying storage directories. This avoids a circular dependency
+ * between journal managers and the storage which instantiates them.
+ */
+@InterfaceAudience.Private
+public interface StorageErrorReporter {
+
+  /**
+   * Indicate that some error occurred on the given file.
+   * 
+   * @param f the file which had an error.
+   */
+  public void reportErrorOnFile(File f);
+}

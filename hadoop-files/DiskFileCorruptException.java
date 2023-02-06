@@ -15,13 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.server.datanode;
+
+import java.io.IOException;
 
 /**
- * This package provides commonly used classes for the block movement.
+ * When kernel report a "Input/output error", we use this exception to
+ * represents some corruption(e.g. bad disk track) happened on some disk file.
  */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+public class DiskFileCorruptException extends IOException {
+  /**
+   * Instantiate.
+   * @param msg the exception message
+   * @param cause the underlying cause
+   */
+  public DiskFileCorruptException(String msg, Throwable cause) {
+    super(msg, cause);
+  }
 
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+  public DiskFileCorruptException(String msg) {
+    super(msg);
+  }
+}

@@ -15,13 +15,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.server.datanode;
+
+import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeReference;
+
+import java.io.Closeable;
+import java.io.IOException;
 
 /**
- * This package provides commonly used classes for the block movement.
+ * This class includes a replica being actively written and the reference to
+ * the fs volume where this replica is located.
  */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+public class ReplicaHandler implements Closeable {
+  private final ReplicaInPipeline replica;
+  private final FsVolumeReference volumeReference;
 
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+  public ReplicaHandler(
+      ReplicaInPipeline replica, FsVolumeReference reference) {
+    this.replica = replica;
+    this.volumeReference = reference;
+  }
+
+  @Override
+  public void close() throws IOException {
+    if (this.volumeReference != null) {
+      volumeReference.close();
+    }
+  }
+
+  public ReplicaInPipeline getReplica() {
+    return replica;
+  }
+}

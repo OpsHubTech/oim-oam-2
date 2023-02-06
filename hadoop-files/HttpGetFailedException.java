@@ -15,13 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-/**
- * This package provides commonly used classes for the block movement.
- */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+package org.apache.hadoop.hdfs.server.common;
 
 import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+
+import java.io.IOException;
+import java.net.HttpURLConnection;
+
+@InterfaceAudience.Private
+public class HttpGetFailedException extends IOException {
+  private static final long serialVersionUID = 1L;
+  private final int responseCode;
+
+  public HttpGetFailedException(String msg, HttpURLConnection connection)
+      throws IOException {
+    super(msg);
+    this.responseCode = connection.getResponseCode();
+  }
+
+  public int getResponseCode() {
+    return responseCode;
+  }
+}

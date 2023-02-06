@@ -15,13 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.server.common;
+
+import java.io.IOException;
+import org.apache.hadoop.security.token.delegation.AbstractDelegationTokenIdentifier;
 
 /**
- * This package provides commonly used classes for the block movement.
+ * Interface to verify delegation tokens passed through WebHDFS.
+ * Implementations are intercepted by JspHelper that pass delegation token
+ * for verification.
  */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+public interface TokenVerifier<T extends AbstractDelegationTokenIdentifier> {
 
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+  /* Verify delegation token passed through WebHDFS
+   * Name node, Router implement this for JspHelper to verify token
+   */
+  void verifyToken(T t, byte[] password) throws IOException;
+
+}

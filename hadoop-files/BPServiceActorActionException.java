@@ -16,12 +16,23 @@
  * limitations under the License.
  */
 
-/**
- * This package provides commonly used classes for the block movement.
- */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-package org.apache.hadoop.hdfs.server.common.sps;
+package org.apache.hadoop.hdfs.server.datanode;
 
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+import java.io.IOException;
+
+public class BPServiceActorActionException extends IOException {
+
+/**
+ * An exception for BPSerivceActor call related issues
+ */
+  private static final long serialVersionUID = 1L;
+
+  public BPServiceActorActionException(String message) {
+    super(message);
+  }
+
+  public BPServiceActorActionException(String message, Throwable cause) {
+    super(message, cause);
+  }
+
+}

@@ -15,320 +15,453 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.examples.pi;
+package org.apache.hadoop.hdfs.server.common;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.io.PrintStream;
-import java.io.PrintWriter;
-import java.text.SimpleDateFormat;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.UnknownHostException;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.Semaphore;
+import java.util.Map;
+import java.util.Set;
 
-import org.apache.hadoop.examples.pi.DistSum.Machine;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.util.ToolRunner;
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.DFSConfigKeys;
+import org.apache.hadoop.hdfs.DFSUtilClient;
+import org.apache.hadoop.hdfs.server.namenode.ImageServlet;
+import org.apache.hadoop.hdfs.server.protocol.StorageReport;
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
+import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.net.DomainNameResolver;
+import org.apache.hadoop.net.DomainNameResolverFactory;
+import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.security.authentication.client.AuthenticationException;
+import org.apache.hadoop.util.Lists;
+import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.Time;
+import org.apache.hadoop.hdfs.web.URLConnectionFactory;
 
-import org.apache.hadoop.thirdparty.com.google.common.base.Charsets;
-import org.apache.hadoop.util.concurrent.HadoopExecutors;
+import org.apache.hadoop.util.Preconditions;
 
-/** Utility methods */
-public class Util {
-  /** Output stream */
-  public static final PrintStream out = System.out; 
-  /** Error stream */
-  public static final PrintStream err = System.out; 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-  /** Timer */
-  public static class Timer {
-    private final boolean isAccumulative;
-    private final long start = System.currentTimeMillis();
-    private long previous = start;
-  
-    /** Timer constructor
-     * @param isAccumulative  Is accumulating the time duration?
-     */
-    public Timer(boolean isAccumulative) {
-      this.isAccumulative = isAccumulative;
-      final StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-      final StackTraceElement e = stack[stack.length - 1];
-      out.println(e + " started at " + new Date(start));
-    }
-  
-    /** Same as tick(null). */
-    public long tick() {return tick(null);}
 
-    /**
-     * Tick
-     * @param s Output message.  No output if it is null.
-     * @return delta
-     */
-    public synchronized long tick(String s) {
-      final long t = System.currentTimeMillis();
-      final long delta = t - (isAccumulative? start: previous);
-      if (s != null) {
-        out.format("%15dms (=%-15s: %s%n", delta, millis2String(delta) + ")", s);
-        out.flush();
-      }
-      previous = t;
-      return delta;
-    }
-  }
-    
-  /** Covert milliseconds to a String. */
-  public static String millis2String(long n) {
-    if (n < 0)
-      return "-" + millis2String(-n);
-    else if (n < 1000)
-      return n + "ms";
+@InterfaceAudience.Private
+public final class Util {
+  private final static Logger LOG =
+      LoggerFactory.getLogger(Util.class.getName());
 
-    final StringBuilder b = new StringBuilder();
-    final int millis = (int)(n % 1000L);
-    if (millis != 0)
-      b.append(String.format(".%03d", millis)); 
-    if ((n /= 1000) < 60)
-      return b.insert(0, n).append("s").toString();
+  public final static String FILE_LENGTH = "File-Length";
+  public final static String CONTENT_LENGTH = "Content-Length";
+  public final static String MD5_HEADER = "X-MD5-Digest";
+  public final static String CONTENT_TYPE = "Content-Type";
+  public final static String CONTENT_TRANSFER_ENCODING = "Content-Transfer-Encoding";
 
-    b.insert(0, String.format(":%02d", (int)(n % 60L)));
-    if ((n /= 60) < 60)
-      return b.insert(0, n).toString();
+  public final static int IO_FILE_BUFFER_SIZE;
+  private static final boolean isSpnegoEnabled;
+  public static final URLConnectionFactory connectionFactory;
 
-    b.insert(0, String.format(":%02d", (int)(n % 60L)));
-    if ((n /= 60) < 24)
-      return b.insert(0, n).toString();
-
-    b.insert(0, n % 24L);
-    final int days = (int)((n /= 24) % 365L);
-    b.insert(0, days == 1? " day ": " days ").insert(0, days);
-    if ((n /= 365L) > 0)
-      b.insert(0, n == 1? " year ": " years ").insert(0, n);
-
-    return b.toString();
+  static {
+    Configuration conf = new Configuration();
+    connectionFactory = URLConnectionFactory
+        .newDefaultURLConnectionFactory(conf);
+    isSpnegoEnabled = UserGroupInformation.isSecurityEnabled();
+    IO_FILE_BUFFER_SIZE = DFSUtilClient.getIoFileBufferSize(conf);
   }
 
-  /** Covert a String to a long.  
-   * This support comma separated number format.
+  /**
+   * Interprets the passed string as a URI. In case of error it 
+   * assumes the specified string is a file.
+   *
+   * @param s the string to interpret
+   * @return the resulting URI
    */
-  public static long string2long(String s) {
-    return Long.parseLong(s.trim().replace(",", ""));
-  }
-
-  /** Covert a long to a String in comma separated number format. */  
-  public static String long2string(long n) {
-    if (n < 0)
-      return "-" + long2string(-n);
-    
-    final StringBuilder b = new StringBuilder();
-    for(; n >= 1000; n = n/1000)
-      b.insert(0, String.format(",%03d", n % 1000));
-    return n + b.toString();    
-  }
-
-  /** Parse a variable. */  
-  public static long parseLongVariable(final String name, final String s) {
-    return string2long(parseStringVariable(name, s));
-  }
-
-  /** Parse a variable. */  
-  public static String parseStringVariable(final String name, final String s) {
-    if (!s.startsWith(name + '='))
-      throw new IllegalArgumentException("!s.startsWith(name + '='), name="
-          + name + ", s=" + s);
-    return s.substring(name.length() + 1);
-  }
-
-  /** Execute the callables by a number of threads */
-  public static <T, E extends Callable<T>> void execute(int nThreads, List<E> callables
-      ) throws InterruptedException, ExecutionException {
-    final ExecutorService executor = HadoopExecutors.newFixedThreadPool(
-        nThreads);
-    final List<Future<T>> futures = executor.invokeAll(callables);
-    for(Future<T> f : futures)
-      f.get();
-  }
-
-  /** Print usage messages */
-  public static int printUsage(String[] args, String usage) {
-    err.println("args = " + Arrays.asList(args));
-    err.println();
-    err.println("Usage: java " + usage);
-    err.println();
-    ToolRunner.printGenericCommandUsage(err);
-    return -1;
-  }
-
-  /** Combine a list of items. */
-  public static <T extends Combinable<T>> List<T> combine(Collection<T> items) {
-    final List<T> sorted = new ArrayList<T>(items);
-    if (sorted.size() <= 1)
-      return sorted;
-
-    Collections.sort(sorted);
-    final List<T> combined = new ArrayList<T>(items.size());
-    T prev = sorted.get(0);
-    for(int i = 1; i < sorted.size(); i++) {
-      final T curr = sorted.get(i);
-      final T c = curr.combine(prev);
-
-      if (c != null)
-        prev = c;
-      else {
-        combined.add(prev);
-        prev = curr;
-      }
-    }
-    combined.add(prev);
-    return combined;
-  }
-
-  /** Check local directory. */
-  public static void checkDirectory(File dir) {
-    if (!dir.exists())
-      if (!dir.mkdirs())
-        throw new IllegalArgumentException("!dir.mkdirs(), dir=" + dir);
-    if (!dir.isDirectory())
-      throw new IllegalArgumentException("dir (=" + dir + ") is not a directory.");
-  }
-
-  /** Create a writer of a local file. */
-  public static PrintWriter createWriter(File dir, String prefix) throws IOException {
-    checkDirectory(dir);
-    
-    SimpleDateFormat dateFormat = new SimpleDateFormat("-yyyyMMdd-HHmmssSSS");
-    for(;;) {
-      final File f = new File(dir,
-          prefix + dateFormat.format(new Date(System.currentTimeMillis())) + ".txt");
-      if (!f.exists())
-        return new PrintWriter(new OutputStreamWriter(new FileOutputStream(f), Charsets.UTF_8));
-
-      try {Thread.sleep(10);} catch (InterruptedException e) {}
-    }
-  }
-
-  /** Print a "bits skipped" message. */
-  public static void printBitSkipped(final long b) {
-    out.println();
-    out.println("b = " + long2string(b)
-        + " (" + (b < 2? "bit": "bits") + " skipped)");
-  }
-
-  /** Convert a pi value to a String. */
-  public static String pi2string(final double pi, final long terms) {
-    final long value = (long)(pi * (1L << DOUBLE_PRECISION));
-    final int acc_bit = accuracy(terms, false);
-    final int acc_hex = acc_bit/4;
-    final int shift = DOUBLE_PRECISION - acc_bit;
-    return String.format("%0" + acc_hex + "X %0" + (13-acc_hex) + "X (%d hex digits)",
-        value >> shift, value & ((1 << shift) - 1), acc_hex);
-  }
-
-  static final int DOUBLE_PRECISION = 52; //mantissa size
-  static final int MACHEPS_EXPONENT = DOUBLE_PRECISION + 1;
-  /** Estimate accuracy. */
-  public static int accuracy(final long terms, boolean print) {
-    final double error = terms <= 0? 2: (Math.log(terms) / Math.log(2)) / 2;
-    final int bits = MACHEPS_EXPONENT - (int)Math.ceil(error);
-    if (print)
-      out.println("accuracy: bits=" + bits + ", terms=" + long2string(terms) + ", error exponent=" + error);
-    return bits - bits%4;
-  }
-
-  private static final String JOB_SEPARATION_PROPERTY = "pi.job.separation.seconds";
-  private static final Semaphore JOB_SEMAPHORE = new Semaphore(1);
-
-  /** Run a job. */
-  static void runJob(String name, Job job, Machine machine, String startmessage, Util.Timer timer) {
-    JOB_SEMAPHORE.acquireUninterruptibly();
-    Long starttime = null;
+  static URI stringAsURI(String s) throws IOException {
+    URI u = null;
+    // try to make a URI
     try {
+      u = new URI(s);
+    } catch (URISyntaxException e){
+      LOG.error("Syntax error in URI " + s
+          + ". Please check hdfs configuration.", e);
+    }
+
+    // if URI is null or scheme is undefined, then assume it's file://
+    if(u == null || u.getScheme() == null){
+      LOG.info("Assuming 'file' scheme for path " + s + " in configuration.");
+      u = fileAsURI(new File(s));
+    }
+    return u;
+  }
+
+  /**
+   * Converts the passed File to a URI. This method trims the trailing slash if
+   * one is appended because the underlying file is in fact a directory that
+   * exists.
+   * 
+   * @param f the file to convert
+   * @return the resulting URI
+   */
+  public static URI fileAsURI(File f) throws IOException {
+    URI u = f.getCanonicalFile().toURI();
+    
+    // trim the trailing slash, if it's present
+    if (u.getPath().endsWith("/")) {
+      String uriAsString = u.toString();
       try {
-        starttime = timer.tick("starting " + name + " ...\n  " + startmessage);
-
-        //initialize and submit a job
-        machine.init(job);
-        job.submit();
-  
-        // Separate jobs
-        final long sleeptime = 1000L * job.getConfiguration().getInt(JOB_SEPARATION_PROPERTY, 10);
-        if (sleeptime > 0) {
-          Util.out.println(name + "> sleep(" + Util.millis2String(sleeptime) + ")");
-          Thread.sleep(sleeptime);
-        }
-      } finally {
-        JOB_SEMAPHORE.release();
-      }
-  
-      if (!job.waitForCompletion(false))
-        throw new RuntimeException(name + " failed.");
-    } catch(Exception e) {
-      throw e instanceof RuntimeException? (RuntimeException)e: new RuntimeException(e);
-    } finally {
-      if (starttime != null)
-        timer.tick(name + "> timetaken=" + Util.millis2String(timer.tick() - starttime));
-    }
-  }
-
-  /** Read job outputs */
-  static List<TaskResult> readJobOutputs(FileSystem fs, Path outdir) throws IOException {
-    final List<TaskResult> results = new ArrayList<TaskResult>();
-    for(FileStatus status : fs.listStatus(outdir)) {
-      if (status.getPath().getName().startsWith("part-")) {
-        final BufferedReader in = new BufferedReader(
-            new InputStreamReader(fs.open(status.getPath()), Charsets.UTF_8));
-        try {
-          for(String line; (line = in.readLine()) != null; )
-            results.add(TaskResult.valueOf(line));
-        }
-        finally {
-          in.close();
-        }
+        u = new URI(uriAsString.substring(0, uriAsString.length() - 1));
+      } catch (URISyntaxException e) {
+        throw new IOException(e);
       }
     }
-    if (results.isEmpty())
-      throw new IOException("Output not found");
-    return results;
+    
+    return u;
   }
-  
-  /** Write results */
-  static void writeResults(String name, List<TaskResult> results, FileSystem fs, String dir) throws IOException {
-    final Path outfile = new Path(dir, name + ".txt");
-    Util.out.println(name + "> writing results to " + outfile);
-    final PrintWriter out = new PrintWriter(new OutputStreamWriter(fs.create(outfile), Charsets.UTF_8), true);
+
+  /**
+   * Converts a collection of strings into a collection of URIs.
+   * @param names collection of strings to convert to URIs
+   * @return collection of URIs
+   */
+  public static List<URI> stringCollectionAsURIs(
+                                  Collection<String> names) {
+    List<URI> uris = new ArrayList<>(names.size());
+    for(String name : names) {
+      try {
+        uris.add(stringAsURI(name));
+      } catch (IOException e) {
+        LOG.error("Error while processing URI: " + name, e);
+      }
+    }
+    return uris;
+  }
+
+  /**
+   * Downloads the files at the specified url location into destination
+   * storage.
+   */
+  public static MD5Hash doGetUrl(URL url, List<File> localPaths,
+      Storage dstStorage, boolean getChecksum, int timeout,
+      DataTransferThrottler throttler) throws IOException {
+    HttpURLConnection connection;
     try {
-      for(TaskResult r : results)
-        out.println(r);
+      connection = (HttpURLConnection)
+          connectionFactory.openConnection(url, isSpnegoEnabled);
+    } catch (AuthenticationException e) {
+      throw new IOException(e);
     }
-    finally {
-      out.close();
+
+    setTimeout(connection, timeout);
+
+    if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+      throw new HttpGetFailedException("Image transfer servlet at " + url +
+              " failed with status code " + connection.getResponseCode() +
+              "\nResponse message:\n" + connection.getResponseMessage(),
+          connection);
+    }
+
+    long advertisedSize;
+    String contentLength = connection.getHeaderField(CONTENT_LENGTH);
+    if (contentLength != null) {
+      advertisedSize = Long.parseLong(contentLength);
+    } else {
+      throw new IOException(CONTENT_LENGTH + " header is not provided " +
+          "by the namenode when trying to fetch " + url);
+    }
+    MD5Hash advertisedDigest = parseMD5Header(connection);
+    String fsImageName = connection
+        .getHeaderField(ImageServlet.HADOOP_IMAGE_EDITS_HEADER);
+    InputStream stream = connection.getInputStream();
+
+    return receiveFile(url.toExternalForm(), localPaths, dstStorage,
+        getChecksum, advertisedSize, advertisedDigest, fsImageName, stream,
+        throttler);
+  }
+
+  /**
+   * Receives file at the url location from the input stream and puts them in
+   * the specified destination storage location.
+   */
+  public static MD5Hash receiveFile(String url, List<File> localPaths,
+      Storage dstStorage, boolean getChecksum, long advertisedSize,
+      MD5Hash advertisedDigest, String fsImageName, InputStream stream,
+      DataTransferThrottler throttler) throws
+      IOException {
+    long startTime = Time.monotonicNow();
+    Map<FileOutputStream, File> streamPathMap = new HashMap<>();
+    StringBuilder xferStats = new StringBuilder();
+    double xferCombined = 0;
+    if (localPaths != null) {
+      // If the local paths refer to directories, use the server-provided header
+      // as the filename within that directory
+      List<File> newLocalPaths = new ArrayList<>();
+      for (File localPath : localPaths) {
+        if (localPath.isDirectory()) {
+          if (fsImageName == null) {
+            throw new IOException("No filename header provided by server");
+          }
+          newLocalPaths.add(new File(localPath, fsImageName));
+        } else {
+          newLocalPaths.add(localPath);
+        }
+      }
+      localPaths = newLocalPaths;
+    }
+
+
+    long received = 0;
+    MessageDigest digester = null;
+    if (getChecksum) {
+      digester = MD5Hash.getDigester();
+      stream = new DigestInputStream(stream, digester);
+    }
+    boolean finishedReceiving = false;
+    int num = 1;
+
+    List<FileOutputStream> outputStreams = Lists.newArrayList();
+
+    try {
+      if (localPaths != null) {
+        for (File f : localPaths) {
+          try {
+            if (f.exists()) {
+              LOG.warn("Overwriting existing file " + f
+                  + " with file downloaded from " + url);
+            }
+            FileOutputStream fos = new FileOutputStream(f);
+            outputStreams.add(fos);
+            streamPathMap.put(fos, f);
+          } catch (IOException ioe) {
+            LOG.warn("Unable to download file " + f, ioe);
+            // This will be null if we're downloading the fsimage to a file
+            // outside of an NNStorage directory.
+            if (dstStorage != null &&
+                (dstStorage instanceof StorageErrorReporter)) {
+              ((StorageErrorReporter)dstStorage).reportErrorOnFile(f);
+            }
+          }
+        }
+
+        if (outputStreams.isEmpty()) {
+          throw new IOException(
+              "Unable to download to any storage directory");
+        }
+      }
+
+      byte[] buf = new byte[IO_FILE_BUFFER_SIZE];
+      while (num > 0) {
+        num = stream.read(buf);
+        if (num > 0) {
+          received += num;
+          for (FileOutputStream fos : outputStreams) {
+            fos.write(buf, 0, num);
+          }
+          if (throttler != null) {
+            throttler.throttle(num);
+          }
+        }
+      }
+      finishedReceiving = true;
+      double xferSec = Math.max(
+          ((float)(Time.monotonicNow() - startTime)) / 1000.0, 0.001);
+      long xferKb = received / 1024;
+      xferCombined += xferSec;
+      xferStats.append(
+          String.format(" The file download took %.2fs at %.2f KB/s.",
+              xferSec, xferKb / xferSec));
+    } finally {
+      stream.close();
+      for (FileOutputStream fos : outputStreams) {
+        long flushStartTime = Time.monotonicNow();
+        fos.getChannel().force(true);
+        fos.close();
+        double writeSec = Math.max(((float)
+            (Time.monotonicNow() - flushStartTime)) / 1000.0, 0.001);
+        xferCombined += writeSec;
+        xferStats.append(String
+            .format(" Synchronous (fsync) write to disk of " +
+                streamPathMap.get(fos).getAbsolutePath() +
+                " took %.2fs.", writeSec));
+      }
+
+      // Something went wrong and did not finish reading.
+      // Remove the temporary files.
+      if (!finishedReceiving) {
+        deleteTmpFiles(localPaths);
+      }
+
+      if (finishedReceiving && received != advertisedSize) {
+        // only throw this exception if we think we read all of it on our end
+        // -- otherwise a client-side IOException would be masked by this
+        // exception that makes it look like a server-side problem!
+        deleteTmpFiles(localPaths);
+        throw new IOException("File " + url + " received length " + received +
+            " is not of the advertised size " + advertisedSize +
+            ". Fsimage name: " + fsImageName + " lastReceived: " + num);
+      }
+    }
+    xferStats.insert(0, String.format("Combined time for file download and" +
+        " fsync to all disks took %.2fs.", xferCombined));
+    LOG.info(xferStats.toString());
+
+    if (digester != null) {
+      MD5Hash computedDigest = new MD5Hash(digester.digest());
+
+      if (advertisedDigest != null &&
+          !computedDigest.equals(advertisedDigest)) {
+        deleteTmpFiles(localPaths);
+        throw new IOException("File " + url + " computed digest " +
+            computedDigest + " does not match advertised digest " +
+            advertisedDigest);
+      }
+      return computedDigest;
+    } else {
+      return null;
     }
   }
 
-  /** Create a directory. */
-  static boolean createNonexistingDirectory(FileSystem fs, Path dir) throws IOException {
-    if (fs.exists(dir)) {
-      Util.err.println("dir (= " + dir + ") already exists.");
-      return false;
-    } else if (!fs.mkdirs(dir)) {
-      throw new IOException("Cannot create working directory " + dir);
+  private static void deleteTmpFiles(List<File> files) {
+    if (files == null) {
+      return;
     }
-    fs.setPermission(dir, new FsPermission((short)0777));
-    return true;
+
+    LOG.info("Deleting temporary files: " + files);
+    for (File file : files) {
+      if (!file.delete()) {
+        LOG.warn("Deleting " + file + " has failed");
+      }
+    }
+  }
+
+  /**
+   * Sets a timeout value in millisecods for the Http connection.
+   * @param connection the Http connection for which timeout needs to be set
+   * @param timeout value to be set as timeout in milliseconds
+   */
+  public static void setTimeout(HttpURLConnection connection, int timeout) {
+    if (timeout > 0) {
+      connection.setConnectTimeout(timeout);
+      connection.setReadTimeout(timeout);
+    }
+  }
+
+  private static MD5Hash parseMD5Header(HttpURLConnection connection) {
+    String header = connection.getHeaderField(MD5_HEADER);
+    return (header != null) ? new MD5Hash(header) : null;
+  }
+
+  public static List<InetSocketAddress> getAddressesList(URI uri, Configuration conf)
+      throws IOException{
+    String authority = uri.getAuthority();
+    Preconditions.checkArgument(authority != null && !authority.isEmpty(),
+        "URI has no authority: " + uri);
+
+    String[] parts = StringUtils.split(authority, ';');
+    for (int i = 0; i < parts.length; i++) {
+      parts[i] = parts[i].trim();
+    }
+
+    boolean resolveNeeded = conf.getBoolean(
+        DFSConfigKeys.DFS_NAMENODE_EDITS_QJOURNALS_RESOLUTION_ENABLED,
+        DFSConfigKeys.DFS_NAMENODE_EDITS_QJOURNALS_RESOLUTION_ENABLED_DEFAULT);
+    DomainNameResolver dnr = DomainNameResolverFactory.newInstance(
+        conf,
+        DFSConfigKeys.DFS_NAMENODE_EDITS_QJOURNALS_RESOLUTION_RESOLVER_IMPL);
+
+    List<InetSocketAddress> addrs = Lists.newArrayList();
+    for (String addr : parts) {
+      if (resolveNeeded) {
+        LOG.info("Resolving journal address: " + addr);
+        InetSocketAddress isa = NetUtils.createSocketAddr(
+            addr, DFSConfigKeys.DFS_JOURNALNODE_RPC_PORT_DEFAULT);
+        // Get multiple hostnames from domain name if needed,
+        // for example multiple hosts behind a DNS entry.
+        int port = isa.getPort();
+        // QJM should just use FQDN
+        String[] hostnames = dnr
+            .getAllResolvedHostnameByDomainName(isa.getHostName(), true);
+        if (hostnames.length == 0) {
+          throw new UnknownHostException(addr);
+        }
+        for (String h : hostnames) {
+          addrs.add(NetUtils.createSocketAddr(
+              h + ":" + port,
+              DFSConfigKeys.DFS_JOURNALNODE_RPC_PORT_DEFAULT)
+          );
+        }
+      } else {
+        InetSocketAddress isa = NetUtils.createSocketAddr(
+            addr, DFSConfigKeys.DFS_JOURNALNODE_RPC_PORT_DEFAULT);
+        if (isa.isUnresolved()) {
+          throw new UnknownHostException(addr);
+        }
+        addrs.add(isa);
+      }
+    }
+    return addrs;
+  }
+
+  public static List<InetSocketAddress> getLoggerAddresses(URI uri,
+      Set<InetSocketAddress> addrsToExclude, Configuration conf) throws IOException {
+    List<InetSocketAddress> addrsList = getAddressesList(uri, conf);
+    addrsList.removeAll(addrsToExclude);
+    return addrsList;
+  }
+
+  public static boolean isDiskStatsEnabled(int fileIOSamplingPercentage) {
+    final boolean isEnabled;
+    if (fileIOSamplingPercentage <= 0) {
+      LOG.info(DFSConfigKeys
+          .DFS_DATANODE_FILEIO_PROFILING_SAMPLING_PERCENTAGE_KEY + " set to "
+          + fileIOSamplingPercentage + ". Disabling file IO profiling");
+      isEnabled = false;
+    } else {
+      LOG.info(DFSConfigKeys
+          .DFS_DATANODE_FILEIO_PROFILING_SAMPLING_PERCENTAGE_KEY + " set to "
+          + fileIOSamplingPercentage + ". Enabling file IO profiling");
+      isEnabled = true;
+    }
+
+    return isEnabled;
+  }
+
+  /**
+   * Return the standard deviation of storage block pool usage.
+   */
+  public static float getBlockPoolUsedPercentStdDev(StorageReport[] storageReports) {
+    ArrayList<Float> usagePercentList = new ArrayList<>();
+    float totalUsagePercent = 0.0f;
+    float dev = 0.0f;
+
+    if (storageReports.length == 0) {
+      return dev;
+    }
+
+    for (StorageReport s : storageReports) {
+      usagePercentList.add(s.getBlockPoolUsagePercent());
+      totalUsagePercent += s.getBlockPoolUsagePercent();
+    }
+
+    totalUsagePercent /= storageReports.length;
+    for (Float usagePercent : usagePercentList) {
+      dev += (usagePercent - totalUsagePercent)
+          * (usagePercent - totalUsagePercent);
+    }
+    dev = (float) Math.sqrt(dev / usagePercentList.size());
+    return dev;
   }
 }
