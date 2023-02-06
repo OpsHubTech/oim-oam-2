@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.protocol;
 
-/**
- * This package contains classes related to hdfs data transfer protocol.
- */
-@InterfaceStability.Evolving
-package org.apache.hadoop.hdfs.protocol.datatransfer;
-import org.apache.hadoop.classification.InterfaceStability;
+import java.io.IOException;
+
+/** Snapshot related exception. */
+public class SnapshotException extends IOException {
+  private static final long serialVersionUID = 1L;
+
+  public SnapshotException(final String message) {
+    super(message);
+  }
+
+  public SnapshotException(final Throwable cause) {
+    super(cause);
+  }
+
+  public SnapshotException(final String message, final Throwable cause) {
+    super(message, cause);
+  }
+}

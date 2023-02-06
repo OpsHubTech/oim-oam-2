@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.qjournal.client;
 
-/**
- * This package contains classes related to hdfs data transfer protocol.
- */
-@InterfaceStability.Evolving
-package org.apache.hadoop.hdfs.protocol.datatransfer;
-import org.apache.hadoop.classification.InterfaceStability;
+import java.io.IOException;
+
+class LoggerTooFarBehindException extends IOException {
+  private static final long serialVersionUID = 1L;
+
+}

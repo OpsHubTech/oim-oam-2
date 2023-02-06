@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,9 +16,28 @@
  * limitations under the License.
  */
 
+package org.apache.hadoop.hdfs.security.token.block;
+
+import javax.crypto.SecretKey;
+
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.security.token.delegation.DelegationKey;
+
 /**
- * This package contains classes related to hdfs data transfer protocol.
+ * Key used for generating and verifying block tokens
  */
-@InterfaceStability.Evolving
-package org.apache.hadoop.hdfs.protocol.datatransfer;
-import org.apache.hadoop.classification.InterfaceStability;
+@InterfaceAudience.Private
+public class BlockKey extends DelegationKey {
+
+  public BlockKey() {
+    super();
+  }
+
+  public BlockKey(int keyId, long expiryDate, SecretKey key) {
+    super(keyId, expiryDate, key);
+  }
+  
+  public BlockKey(int keyId, long expiryDate, byte[] encodedKey) {
+    super(keyId, expiryDate, encodedKey);
+  }
+}

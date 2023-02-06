@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.qjournal.server;
+
+import java.io.IOException;
+
+import org.apache.hadoop.classification.VisibleForTesting;
+
+import org.apache.hadoop.classification.InterfaceAudience;
 
 /**
- * This package contains classes related to hdfs data transfer protocol.
+ * Used for injecting faults in QuorumJournalManager tests.
+ * Calls into this are a no-op in production code. 
  */
-@InterfaceStability.Evolving
-package org.apache.hadoop.hdfs.protocol.datatransfer;
-import org.apache.hadoop.classification.InterfaceStability;
+@VisibleForTesting
+@InterfaceAudience.Private
+public class JournalFaultInjector {
+  public static JournalFaultInjector instance = new JournalFaultInjector();
+
+  public static JournalFaultInjector get() {
+    return instance;
+  }
+
+  public void beforePersistPaxosData() throws IOException {}
+  public void afterPersistPaxosData() throws IOException {}
+}

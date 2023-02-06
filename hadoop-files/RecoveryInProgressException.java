@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hdfs.protocol;
+
+import java.io.IOException;
+
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceStability;
 
 /**
- * This package contains classes related to hdfs data transfer protocol.
+ * Exception indicating that a replica is already being recovery.
  */
+@InterfaceAudience.Private
 @InterfaceStability.Evolving
-package org.apache.hadoop.hdfs.protocol.datatransfer;
-import org.apache.hadoop.classification.InterfaceStability;
+public class RecoveryInProgressException extends IOException {
+  private static final long serialVersionUID = 1L;
+
+  public RecoveryInProgressException(String msg) {
+    super(msg);
+  }
+}
